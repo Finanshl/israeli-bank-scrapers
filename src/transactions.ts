@@ -1,10 +1,11 @@
 export interface TransactionsAccount {
   accountNumber: string;
-  savingsAccount?: boolean;
   balance?: number;
   balanceDate?: string;
   cardFrame?: number;
   cardType?: CardType;
+  currency?: string;
+  savingsAccount?: boolean;
   txns: Transaction[];
 }
 
