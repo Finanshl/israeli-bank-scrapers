@@ -78,7 +78,12 @@
     "debug": "^4.3.2",
     "moment": "^2.22.2",
     "moment-timezone": "^0.5.37",
-    "puppeteer": "^24.40.0"
+    "node-fetch": "^2.2.0",
+    "puppeteer": "^24.40.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "utility-types": "^3.11.0",
+    "uuid": "^9.0.1"
   },
   "files": [
     "lib/**/*"
