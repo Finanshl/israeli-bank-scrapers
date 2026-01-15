@@ -47,7 +47,7 @@ async function handleTwoFactor(page: Page, isHeadless: boolean) {
 
   try {
     // Check if we're on a 2FA page by looking at the URL
-    const currentUrl = page.url();
+    let currentUrl = page.url();
     debug('Current URL after redirect: %s', currentUrl);
 
     const is2FAPage =
@@ -70,7 +70,7 @@ async function handleTwoFactor(page: Page, isHeadless: boolean) {
 
       while (Date.now() - startTime < maxWaitTime) {
         // Check if we've successfully navigated to the accounts page
-        const currentUrl = page.url();
+        currentUrl = page.url();
         if (currentUrl.includes('/etx/hw/accounts') || currentUrl.includes('/etx/hw/v2/accountshome')) {
           debug('2FA completed successfully - redirected to accounts page');
           return;
@@ -107,7 +107,7 @@ async function handleTwoFactor(page: Page, isHeadless: boolean) {
 async function fetchAccountData(page: Page) {
   debug('Starting to fetch account data');
 
-  const accounts: TransactionsAccount[] = [];
+  const finalAccounts: TransactionsAccount[] = [];
 
   try {
     // Wait for the page to load
@@ -244,7 +244,7 @@ async function fetchAccountData(page: Page) {
         });
       }
 
-      accounts.push({
+      finalAccounts.push({
         accountNumber: accountData.accountNumber,
         balance,
         currency: DOLLAR_CURRENCY,
@@ -256,7 +256,7 @@ async function fetchAccountData(page: Page) {
       debug('Added account %s with balance %s', accountData.accountNumber, balance);
     }
 
-    debug('Successfully fetched %d accounts', accounts.length);
+    debug('Successfully fetched %d accounts', finalAccounts.length);
   } catch (error) {
     debug('Error fetching account data: %s', error);
     throw error;
@@ -264,7 +264,7 @@ async function fetchAccountData(page: Page) {
 
   return {
     success: true,
-    accounts,
+    accounts: finalAccounts,
   };
 }
 
