@@ -266,7 +266,7 @@ async function fetchAccountData(page: Page) {
         for (const dropdown of allDropdowns) {
           const text = dropdown.textContent?.trim() || '';
           if (text.match(/^(.+?)\s*\(([A-Z0-9]+)\)/)) {
-            dropdownButton = dropdown;
+            dropdownButton = dropdown as HTMLElement;
             break;
           }
         }
@@ -310,7 +310,13 @@ async function fetchAccountData(page: Page) {
         break;
       }
 
-      const accountInfo = accountExtraction;
+      const accountInfo = accountExtraction as {
+        success: true;
+        name: string;
+        symbol: string;
+        accountNumber: string;
+        text: string;
+      };
 
       debug('Found account at index %d: %s (%s)', accountIndex, accountInfo.name, accountInfo.symbol);
 
