@@ -275,7 +275,7 @@ async function getSavingsAccounts(page: Page, accountId: string): Promise<Transa
             });
           }
         } catch (error) {
-          console.error('Error parsing deposit entry:', error);
+          debug('Error parsing deposit entry:', error);
         }
       });
 
