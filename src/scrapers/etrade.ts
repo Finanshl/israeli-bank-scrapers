@@ -7,6 +7,11 @@ import { BaseScraperWithBrowser, LoginResults, type PossibleLoginResults } from 
 
 const debug = getDebug('etrade');
 
+// Helper function to round to 2 decimal places
+function roundToTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function getPossibleLoginResults(baseUrl: string) {
   const urls: PossibleLoginResults = {};
   urls[LoginResults.Success] = [
@@ -104,156 +109,272 @@ async function handleTwoFactor(page: Page, isHeadless: boolean) {
   }
 }
 
+async function scrapeAccountData(page: Page, accountName: string, accountSymbol: string, accountNumber: string) {
+  debug('Scraping data for account: %s (%s)', accountName, accountSymbol);
+
+  // Click "View All" button to see all holdings
+  debug('Looking for View All button');
+  const viewAllButton = await page.evaluateHandle(() => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    return buttons.find(btn => btn.textContent?.includes('View All')) || null;
+  });
+
+  const buttonExists = await page.evaluate(btn => btn !== null, viewAllButton);
+  if (buttonExists) {
+    debug('Clicking View All button');
+    await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const viewAllBtn = buttons.find(btn => btn.textContent?.includes('View All'));
+      if (viewAllBtn) {
+        viewAllBtn.click();
+      }
+    });
+    // Wait for the expanded table to load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  // Extract holdings data from the table
+  const holdingsData = await page.evaluate(() => {
+    const holdings: Array<{
+      dateAcquired: string;
+      benefitType: string;
+      sellableQty: number;
+      expectedGainLoss: number;
+      capitalGainsStatus: string;
+      costBasisPerShare: number;
+      estMarketValue: number;
+    }> = [];
+
+    // Find all table rows in the tbody
+    const rows = document.querySelectorAll('.spTable tbody tr.spTableRow');
+
+    rows.forEach(row => {
+      try {
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 8) return; // Skip if not enough columns
+
+        // Extract data from each cell
+        const dateAcquired = cells[1]?.textContent?.trim() || '';
+        const benefitType = cells[2]?.textContent?.trim() || '';
+        const sellableQtyText = cells[3]?.textContent?.trim() || '0';
+        const sellableQty = parseInt(sellableQtyText, 10);
+
+        // Extract Expected Gain/Loss (remove +/- and $, convert to number)
+        const expectedGainLossText = cells[4]?.textContent?.trim() || '+$0.00';
+        const expectedGainLossMatch = expectedGainLossText.match(/([+-])?\$([0-9,]+\.\d{2})/);
+        const expectedGainLoss = expectedGainLossMatch
+          ? parseFloat((expectedGainLossMatch[1] === '-' ? '-' : '') + expectedGainLossMatch[2].replace(/,/g, ''))
+          : 0;
+
+        const capitalGainsStatus = cells[5]?.textContent?.trim() || '';
+
+        // Extract Cost Basis (per share)
+        const costBasisText = cells[6]?.textContent?.trim() || '$0.00';
+        const costBasisMatch = costBasisText.match(/\$([0-9,]+\.\d{2})/);
+        const costBasisPerShare = costBasisMatch ? parseFloat(costBasisMatch[1].replace(/,/g, '')) : 0;
+
+        // Extract Est. Market Value
+        const estMarketValueText = cells[7]?.textContent?.trim() || '$0.00';
+        const estMarketValueMatch = estMarketValueText.match(/\$([0-9,]+\.\d{2})/);
+        const estMarketValue = estMarketValueMatch ? parseFloat(estMarketValueMatch[1].replace(/,/g, '')) : 0;
+
+        holdings.push({
+          dateAcquired,
+          benefitType,
+          sellableQty,
+          expectedGainLoss,
+          capitalGainsStatus,
+          costBasisPerShare,
+          estMarketValue,
+        });
+      } catch (e) {
+        // Skip rows that can't be parsed
+      }
+    });
+
+    return holdings;
+  });
+
+  debug('Found %d holdings in table', holdingsData.length);
+
+  // Calculate total market value by summing individual holding values
+  const totalMarketValue = holdingsData.reduce((sum, holding) => sum + holding.estMarketValue, 0);
+  debug('Total market value (calculated from holdings): %s', totalMarketValue);
+
+  // Calculate total gain/loss from all holdings
+  const totalExpectedGainLoss = holdingsData.reduce((sum, holding) => sum + holding.expectedGainLoss, 0);
+  const totalSellableQty = holdingsData.reduce((sum, holding) => sum + holding.sellableQty, 0);
+
+  return {
+    accountName,
+    accountSymbol,
+    accountNumber,
+    totalMarketValue,
+    totalExpectedGainLoss,
+    totalSellableQty,
+  };
+}
+
 async function fetchAccountData(page: Page) {
   debug('Starting to fetch account data');
 
   const finalAccounts: TransactionsAccount[] = [];
+  const processedAccounts = new Set<string>();
 
   try {
-    // Wait for the page to load
-    await page.waitForSelector('[class*="WelcomeBanner---dataRowNonExtAc"]', { timeout: 30000 });
-    debug('Welcome banner found');
+    let accountIndex = 0;
+    let previousAccountName = '';
 
-    // Extract total assets
-    const totalAssets = await page.evaluate(() => {
-      const welcomeBanner = document.querySelector('[class*="WelcomeBanner---dataRowNonExtAc"]');
-      if (!welcomeBanner) return null;
+    // Keep processing accounts until we encounter one we've already processed
+    while (true) {
+      const stockPlanUrl = `https://us.etrade.com/etx/sp/stockplan?accountIndex=${accountIndex}&traxui=tsp_portfolios/#/holdings/byStatus`;
+      debug('Navigating to account index %d: %s', accountIndex, stockPlanUrl);
 
-      const totalAssetsText = welcomeBanner.textContent || '';
-      const match = totalAssetsText.match(/\$([0-9,]+\.\d{2})/);
-      return match ? parseFloat(match[1].replace(/,/g, '')) : null;
-    });
-
-    debug('Total assets: %s', totalAssets);
-
-    // Log the current URL for debugging
-    debug('Current page URL: %s', page.url());
-
-    // Wait a bit longer for dynamic content to load
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    debug('Waited 3 seconds for dynamic content');
-
-    // Extract individual account information
-    const accountsData = await page.evaluate(async () => {
-      const accountElements = document.querySelectorAll('[class*="Account---account---"]');
-
-      const accounts: Array<{
-        accountNumber: string;
-        accountName: string;
-        symbol?: string;
-        currentValue: number;
-        daysGain?: number;
-        daysGainPercent?: number;
-        totalValue?: number;
-      }> = [];
-
-      accountElements.forEach(accountEl => {
-        // Click "Show number" button to reveal full account number
-        const showNumberBtn = accountEl.querySelector(
-          'button[aria-label="Show full account number"]',
-        ) as HTMLButtonElement;
-        if (showNumberBtn) {
-          showNumberBtn.click();
-        }
-      });
-
-      // Wait a moment for all the clicks to take effect and DOM to update
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Now extract the account information
-      accountElements.forEach(accountEl => {
-        // Extract account number (after clicking show button and waiting)
-        const accountNumberEl = accountEl.querySelector('[class*="Title---id---"]');
-        let accountNumber = accountNumberEl?.textContent?.trim() || '';
-
-        // Remove "Account number" text if present and convert spaces to hyphens
-        accountNumber = accountNumber
-          .replace(/Account number/gi, '')
-          .trim()
-          .replace(/\s+/g, '-');
-
-        // Extract account name and symbol
-        const accountTitleEl = accountEl.querySelector('[id^="account-pre-title-"]');
-        const accountName = accountTitleEl?.textContent?.trim() || '';
-
-        const symbolEl = accountEl.querySelector('[id^="account-title-"]');
-        const symbolMatch = symbolEl?.textContent?.match(/\(([A-Z]+)\)/);
-        const symbol = symbolMatch ? symbolMatch[1] : undefined;
-
-        // Extract values from the data table
-        const dataTable = accountEl.querySelector('[class*="Info---dataTable---"]');
-        if (!dataTable) {
-          return;
-        }
-
-        const rows = dataTable.querySelectorAll('tr');
-        let currentValue = 0;
-        let daysGain: number | undefined;
-        let daysGainPercent: number | undefined;
-        let totalValue: number | undefined;
-
-        rows.forEach(row => {
-          const label = row.querySelector('td:first-child')?.textContent || '';
-          const valueEl = row.querySelector('td:last-child');
-          const valueText = valueEl?.textContent || '';
-
-          if (label.includes('Current Account')) {
-            const match = valueText.match(/\$([0-9,]+\.\d{2})/);
-            if (match) currentValue = parseFloat(match[1].replace(/,/g, ''));
-          } else if (label.includes("Day's Gain")) {
-            const matches = valueText.match(/\$([0-9,]+\.\d{2})\s+\(([0-9.-]+)%\)/);
-            if (matches) {
-              daysGain = parseFloat(matches[1].replace(/,/g, ''));
-              daysGainPercent = parseFloat(matches[2]);
-            }
-          } else if (label.includes('Total Account')) {
-            const match = valueText.match(/\$([0-9,]+\.\d{2})/);
-            if (match) totalValue = parseFloat(match[1].replace(/,/g, ''));
-          }
-        });
-
-        accounts.push({
-          accountNumber,
-          accountName,
-          symbol,
-          currentValue,
-          daysGain,
-          daysGainPercent,
-          totalValue,
-        });
-      });
-
-      return accounts;
-    });
-
-    debug('Found %d accounts', accountsData.length);
-    for (const accountData of accountsData) {
-      const balance = accountData.currentValue; // We use current value because we only care about vested stocks
-
-      // Create securities array if we have symbol information
-      const securities: Security[] = [];
-      if (accountData.symbol) {
-        securities.push({
-          name: accountData.accountName,
-          symbol: accountData.symbol,
-          volume: 0, // Not available in the current view
-          value: accountData.currentValue,
-          currency: DOLLAR_CURRENCY,
-          changePercentage: 0, // accountData.daysGainPercent, // TODO: Replace with overall change percentage
-          profitLoss: 0, // accountData.daysGain, // TODO: Replace with overall gain
-        });
+      try {
+        await page.goto(stockPlanUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      } catch (error) {
+        debug('Navigation failed for accountIndex %d: %s', accountIndex, error);
+        break;
       }
 
-      finalAccounts.push({
-        accountNumber: accountData.accountNumber,
-        balance,
-        currency: DOLLAR_CURRENCY,
-        txns: [], // E-Trade scraper doesn't fetch transactions in this implementation
-        savingsAccount: securities.length > 0 ? true : undefined,
-        securities: securities.length > 0 ? securities : undefined,
+      // Wait for both the table and dropdown to be visible
+      try {
+        await page.waitForSelector('.spTable', { timeout: 30000 });
+        await page.waitForSelector('.dropdown-toggle', { timeout: 30000 });
+      } catch (error) {
+        debug('Required selectors not found for accountIndex %d', accountIndex);
+        break;
+      }
+
+      // Wait for dynamic content to load
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Extract current account information from dropdown with detailed debugging
+      const accountExtraction = await page.evaluate(() => {
+        // Find all dropdown-toggle elements
+        const allDropdowns = Array.from(document.querySelectorAll('.dropdown-toggle'));
+
+        if (allDropdowns.length === 0) {
+          return {
+            success: false,
+            error: 'No dropdown buttons found with selector .dropdown-toggle',
+          };
+        }
+
+        // Find the dropdown that contains the account info (matches the pattern with parentheses)
+        let dropdownButton: HTMLElement | null = null;
+        for (const dropdown of allDropdowns) {
+          const text = dropdown.textContent?.trim() || '';
+          if (text.match(/^(.+?)\s*\(([A-Z0-9]+)\)/)) {
+            dropdownButton = dropdown;
+            break;
+          }
+        }
+
+        if (!dropdownButton) {
+          // Return all dropdown-toggle elements for inspection
+          return {
+            success: false,
+            error: 'No dropdown matched the account pattern',
+            allDropdownElements: allDropdowns.map(el => ({
+              text: el.textContent?.trim(),
+              className: el.className,
+            })),
+            regexPattern: '^(.+?)\\s*\\(([A-Z0-9]+)\\)',
+          };
+        }
+
+        const buttonText = dropdownButton.textContent?.trim() || '';
+        const accountMatch = buttonText.match(/^(.+?)\s*\(([A-Z0-9]+)\)\s*-?(\d+)/);
+
+        if (!accountMatch) {
+          return {
+            success: false,
+            error: 'Regex failed to match even though initial check passed',
+            buttonText: buttonText,
+          };
+        }
+
+        return {
+          success: true,
+          name: accountMatch[1].trim(),
+          symbol: accountMatch[2],
+          accountNumber: accountMatch[3],
+          text: buttonText,
+        };
       });
 
-      debug('Added account %s with balance %s', accountData.accountNumber, balance);
+      if (!accountExtraction.success) {
+        debug('Account extraction failed at accountIndex %d: %s', accountIndex, accountExtraction.error);
+        debug('Extraction details: %O', accountExtraction);
+        break;
+      }
+
+      const accountInfo = accountExtraction;
+
+      debug('Found account at index %d: %s (%s)', accountIndex, accountInfo.name, accountInfo.symbol);
+
+      // Check if we've already processed this account (indicating we've cycled through all)
+      if (previousAccountName === accountInfo.name) {
+        debug('Encountered same account name again (%s), all accounts processed', accountInfo.name);
+        break;
+      }
+
+      // Skip if we've already processed this account
+      if (processedAccounts.has(accountInfo.name)) {
+        debug('Account %s already processed, skipping', accountInfo.name);
+        accountIndex++;
+        continue;
+      }
+
+      processedAccounts.add(accountInfo.name);
+      previousAccountName = accountInfo.name;
+
+      try {
+        const accountData = await scrapeAccountData(
+          page,
+          accountInfo.name,
+          accountInfo.symbol,
+          accountInfo.accountNumber,
+        );
+
+        if (accountData.totalMarketValue > 0) {
+          // Calculate change percentage
+          const costBasis = accountData.totalMarketValue - accountData.totalExpectedGainLoss;
+          const changePercentage = costBasis > 0 ? (accountData.totalExpectedGainLoss / costBasis) * 100 : 0;
+
+          const security: Security = {
+            name: accountInfo.name,
+            symbol: accountInfo.symbol,
+            volume: accountData.totalSellableQty,
+            value: roundToTwoDecimals(accountData.totalMarketValue),
+            currency: DOLLAR_CURRENCY,
+            changePercentage: roundToTwoDecimals(changePercentage),
+            profitLoss: roundToTwoDecimals(accountData.totalExpectedGainLoss),
+          };
+
+          finalAccounts.push({
+            accountNumber: accountInfo.accountNumber,
+            balance: roundToTwoDecimals(accountData.totalMarketValue),
+            currency: DOLLAR_CURRENCY,
+            txns: [],
+            savingsAccount: true,
+            securities: [security],
+          });
+
+          debug('Added account %s with balance %s', accountInfo.symbol, accountData.totalMarketValue);
+        }
+      } catch (error) {
+        debug('Error processing account %s at index %d: %s', accountInfo.symbol, accountIndex, error);
+      }
+
+      accountIndex++;
+
+      // Safety limit to prevent infinite loops
+      if (accountIndex > 50) {
+        debug('Reached account index limit, stopping');
+        break;
+      }
     }
 
     debug('Successfully fetched %d accounts', finalAccounts.length);
@@ -271,7 +392,6 @@ async function fetchAccountData(page: Page) {
 type ScraperSpecificCredentials = { username: string; password: string };
 
 class ETradeScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
-  // eslint-disable-next-line class-methods-use-this
   get baseUrl() {
     return 'https://us.etrade.com';
   }
