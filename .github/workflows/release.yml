@@ -4,6 +4,11 @@ on:
     branches:
       - master
       - next
+      - nightly
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   release:
     name: Release
@@ -58,17 +63,60 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare release of default to NPM
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: steps.semantic.outputs.new_release_published == 'true' && github.ref != 'refs/heads/nightly'
         run: |
           node utils/pre-publish.js --version ${{ steps.semantic.outputs.new_release_version }}
       - name: Publish to NPM
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: steps.semantic.outputs.new_release_published == 'true' && github.ref != 'refs/heads/nightly'
         run: npm publish --access public --ignore-scripts --provenance
       - name: Prepare release of core to NPM
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: steps.semantic.outputs.new_release_published == 'true' && github.ref != 'refs/heads/nightly'
         run: |
           npm run prepare:core
           node utils/pre-publish.js --version ${{ steps.semantic.outputs.new_release_version }}
       - name: Publish to NPM
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: steps.semantic.outputs.new_release_published == 'true' && github.ref != 'refs/heads/nightly'
         run: npm publish --access public --ignore-scripts --provenance
+      - name: Generate nightly version
+        if: github.ref == 'refs/heads/nightly'
+        id: nightly_version
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          VERSION="0.0.0-nightly.${TIMESTAMP}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=nightly-${TIMESTAMP}" >> $GITHUB_OUTPUT
+      - name: Prepare nightly default package
+        if: github.ref == 'refs/heads/nightly'
+        run: |
+          node utils/pre-publish.js --version ${{ steps.nightly_version.outputs.version }}
+          npm pack
+      - name: Prepare nightly core package
+        if: github.ref == 'refs/heads/nightly'
+        run: |
+          npm run prepare:core
+          node utils/pre-publish.js --version ${{ steps.nightly_version.outputs.version }}
+          npm pack
+      - name: Create nightly GitHub release
+        if: github.ref == 'refs/heads/nightly'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.nightly_version.outputs.tag }}
+          name: Nightly Build ${{ steps.nightly_version.outputs.version }}
+          body: |
+            Nightly build from commit ${{ github.sha }}
+            
+            Install with:
+            ```bash
+            npm install https://github.com/${{ github.repository }}/releases/download/${{ steps.nightly_version.outputs.tag }}/israeli-bank-scrapers-${{ steps.nightly_version.outputs.version }}.tgz
+            ```
+            
+            Or for core:
+            ```bash
+            npm install https://github.com/${{ github.repository }}/releases/download/${{ steps.nightly_version.outputs.tag }}/israeli-bank-scrapers-core-${{ steps.nightly_version.outputs.version }}.tgz
+            ```
+          files: |
+            israeli-bank-scrapers-${{ steps.nightly_version.outputs.version }}.tgz
+            israeli-bank-scrapers-core-${{ steps.nightly_version.outputs.version }}.tgz
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
