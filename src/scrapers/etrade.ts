@@ -222,7 +222,8 @@ async function fetchAccountData(page: Page) {
 
   try {
     // First, navigate to get the account count from the dropdown
-    const initialUrl = 'https://us.etrade.com/etx/sp/stockplan?accountIndex=0&traxui=tsp_portfolios/#/holdings/byStatus';
+    const initialUrl =
+      'https://us.etrade.com/etx/sp/stockplan?accountIndex=0&traxui=tsp_portfolios/#/holdings/byStatus';
     debug('Navigating to initial account to count total accounts');
 
     try {
