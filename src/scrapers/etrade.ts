@@ -219,22 +219,66 @@ async function fetchAccountData(page: Page) {
   debug('Starting to fetch account data');
 
   const finalAccounts: TransactionsAccount[] = [];
-  const processedAccounts = new Set<string>();
 
   try {
-    let accountIndex = 0;
-    let previousAccountName = '';
+    // First, navigate to get the account count from the dropdown
+    const initialUrl = 'https://us.etrade.com/etx/sp/stockplan?accountIndex=0&traxui=tsp_portfolios/#/holdings/byStatus';
+    debug('Navigating to initial account to count total accounts');
 
-    // Keep processing accounts until we encounter one we've already processed
-    while (true) {
+    try {
+      await page.goto(initialUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    } catch (error) {
+      debug('Initial navigation failed: %s', error);
+      throw error;
+    }
+
+    // Wait for the dropdown to be visible
+    try {
+      await page.waitForSelector('.dropdown.text-xs-small', { timeout: 30000 });
+    } catch (error) {
+      debug('Dropdown element not found');
+      throw error;
+    }
+
+    // Count the total number of accounts in the dropdown menu
+    const accountCount = await page.evaluate(() => {
+      const dropdownContainer = document.querySelector('.dropdown.text-xs-small');
+      if (!dropdownContainer) {
+        return 0;
+      }
+
+      const menu = dropdownContainer.querySelector('ul.dropdown-menu');
+      if (!menu) {
+        return 0;
+      }
+
+      const listItems = menu.querySelectorAll('li');
+      return listItems.length;
+    });
+
+    debug('Found %d accounts in dropdown menu', accountCount);
+
+    if (accountCount === 0) {
+      debug('No accounts found in dropdown menu');
+      return {
+        success: true,
+        accounts: finalAccounts,
+      };
+    }
+
+    // Process each account based on the count
+    for (let accountIndex = 0; accountIndex < accountCount; accountIndex++) {
       const stockPlanUrl = `https://us.etrade.com/etx/sp/stockplan?accountIndex=${accountIndex}&traxui=tsp_portfolios/#/holdings/byStatus`;
-      debug('Navigating to account index %d: %s', accountIndex, stockPlanUrl);
+      debug('Processing account index %d of %d', accountIndex + 1, accountCount);
 
-      try {
-        await page.goto(stockPlanUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-      } catch (error) {
-        debug('Navigation failed for accountIndex %d: %s', accountIndex, error);
-        break;
+      // Skip navigation for the first account since we're already there
+      if (accountIndex !== 0) {
+        try {
+          await page.goto(stockPlanUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        } catch (error) {
+          debug('Navigation failed for accountIndex %d: %s', accountIndex, error);
+          continue;
+        }
       }
 
       // Wait for both the table and dropdown to be visible
@@ -243,7 +287,7 @@ async function fetchAccountData(page: Page) {
         await page.waitForSelector('.dropdown-toggle', { timeout: 30000 });
       } catch (error) {
         debug('Required selectors not found for accountIndex %d', accountIndex);
-        break;
+        continue;
       }
 
       // Wait for dynamic content to load
@@ -307,7 +351,7 @@ async function fetchAccountData(page: Page) {
       if (!accountExtraction.success) {
         debug('Account extraction failed at accountIndex %d: %s', accountIndex, accountExtraction.error);
         debug('Extraction details: %O', accountExtraction);
-        break;
+        continue;
       }
 
       const accountInfo = accountExtraction as {
@@ -319,22 +363,6 @@ async function fetchAccountData(page: Page) {
       };
 
       debug('Found account at index %d: %s (%s)', accountIndex, accountInfo.name, accountInfo.symbol);
-
-      // Check if we've already processed this account (indicating we've cycled through all)
-      if (previousAccountName === accountInfo.name) {
-        debug('Encountered same account name again (%s), all accounts processed', accountInfo.name);
-        break;
-      }
-
-      // Skip if we've already processed this account
-      if (processedAccounts.has(accountInfo.name)) {
-        debug('Account %s already processed, skipping', accountInfo.name);
-        accountIndex++;
-        continue;
-      }
-
-      processedAccounts.add(accountInfo.name);
-      previousAccountName = accountInfo.name;
 
       try {
         const accountData = await scrapeAccountData(
@@ -372,14 +400,6 @@ async function fetchAccountData(page: Page) {
         }
       } catch (error) {
         debug('Error processing account %s at index %d: %s', accountInfo.symbol, accountIndex, error);
-      }
-
-      accountIndex++;
-
-      // Safety limit to prevent infinite loops
-      if (accountIndex > 50) {
-        debug('Reached account index limit, stopping');
-        break;
       }
     }
 
