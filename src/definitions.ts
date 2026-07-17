@@ -22,6 +22,7 @@ export enum CompanyTypes {
   oneZero = 'oneZero',
   pagi = 'pagi',
   jerusalem = 'jerusalem',
+  etrade = 'etrade',
 }
 
 export const SCRAPERS = {
@@ -99,6 +100,8 @@ export const SCRAPERS = {
   },
   [CompanyTypes.jerusalem]: {
     name: 'Bank of Jerusalem',
+  [CompanyTypes.etrade]: {
+    name: 'E-Trade',
     loginFields: ['username', PASSWORD_FIELD],
   },
 };

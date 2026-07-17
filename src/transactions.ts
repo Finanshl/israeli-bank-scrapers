@@ -7,6 +7,7 @@ export interface TransactionsAccount {
   currency?: string;
   savingsAccount?: boolean;
   txns: Transaction[];
+  securities?: Security[];
 }
 
 export enum CardType {
@@ -60,4 +61,14 @@ export interface Transaction {
   installments?: TransactionInstallments;
   category?: string;
   rawTransaction?: unknown;
+}
+
+export interface Security {
+  name?: string;
+  symbol: string;
+  volume: number;
+  value: number;
+  currency?: string;
+  changePercentage?: number;
+  profitLoss?: number;
 }
