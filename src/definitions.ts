@@ -100,6 +100,8 @@ export const SCRAPERS = {
   },
   [CompanyTypes.jerusalem]: {
     name: 'Bank of Jerusalem',
+    loginFields: ['username', PASSWORD_FIELD],
+  },
   [CompanyTypes.etrade]: {
     name: 'E-Trade',
     loginFields: ['username', PASSWORD_FIELD],
