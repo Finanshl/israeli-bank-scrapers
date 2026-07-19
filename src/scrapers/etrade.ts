@@ -31,22 +31,6 @@ function createLoginFields(credentials: ScraperSpecificCredentials) {
   ];
 }
 
-async function selectTargetPage(page: Page) {
-  debug('Selecting target page from dropdown');
-  try {
-    // Wait for the dropdown to be available
-    await page.waitForSelector('#loginOptions', { timeout: 5000 });
-
-    // Select the accounts option
-    await page.select('#loginOptions', 'accounts');
-
-    debug('Target page selected');
-  } catch (error) {
-    debug('Error selecting target page: %s', error);
-    throw error;
-  }
-}
-
 async function handleTwoFactor(page: Page, isHeadless: boolean) {
   debug('Checking for 2FA screen');
 
@@ -428,7 +412,6 @@ class ETradeScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
       loginUrl: `${this.baseUrl}/etx/pxy/login`,
       fields: createLoginFields(credentials),
       submitButtonSelector: '#mfaLogonButton',
-      preAction: async () => selectTargetPage(this.page),
       postAction: async () => {
         await waitForRedirect(this.page);
         const isHeadless = !(this.options as any).showBrowser;
